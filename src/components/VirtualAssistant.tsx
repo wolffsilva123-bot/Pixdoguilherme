@@ -5,6 +5,8 @@ import { motion } from "motion/react";
 export const ASSISTANT_MESSAGE =
   "Olá! Seja bem-vindo. Para realizar seu pagamento via Pix, basta clicar no botão Copiar Chave Pix e depois acessar o aplicativo do seu banco para concluir o pagamento. O recebedor é Guilherme Pereira Costa e o banco é Mercado Pago. É simples, rápido e seguro. Obrigado!";
 
+const AUDIO_SRC = "/locucao-pix-guilherme-costa.wav";
+
 type AssistantState =
   | "loading"
   | "playing"
@@ -19,7 +21,8 @@ const IDLE_BARS = Array.from({ length: BAR_COUNT }, (_, idx) => {
   return Math.max(0.18, 0.45 - distanceFromCenter * 0.025);
 });
 
-const FETCH_TIMEOUT_MS = 25000;
+const AUTOPLAY_GUARD_MS = 3500;
+const PLAYBACK_LOAD_TIMEOUT_MS = 12000;
 
 function isAppleMobileOrSafari(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -38,16 +41,24 @@ export function VirtualAssistant() {
   const [orbEnergy, setOrbEnergy] = useState<number>(0);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrlRef = useRef<string | null>(null);
-  const audioReadyRef = useRef<boolean>(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceConnectedRef = useRef<boolean>(false);
   const rafRef = useRef<number | null>(null);
+  const loadTimeoutRef = useRef<number | null>(null);
+  const statusRef = useRef<AssistantState>("loading");
   const isMountedRef = useRef<boolean>(true);
 
   const updateStatus = useCallback((next: AssistantState) => {
+    statusRef.current = next;
     setStatus(next);
+  }, []);
+
+  const clearLoadTimeout = useCallback(() => {
+    if (loadTimeoutRef.current !== null) {
+      window.clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
+    }
   }, []);
 
   const stopVisualizer = useCallback(() => {
@@ -126,7 +137,6 @@ export function VirtualAssistant() {
 
   const attachDesktopAnalyserIfRunning = useCallback(
     (audio: HTMLAudioElement) => {
-      // Never attach createMediaElementSource on Apple/Safari or while AudioContext is suspended
       if (isAppleMobileOrSafari() || sourceConnectedRef.current) return;
       try {
         const AudioContextClass =
@@ -172,170 +182,144 @@ export function VirtualAssistant() {
           sourceConnectedRef.current = true;
         }
       } catch {
-        // Audio still plays natively without WebAudio analyser
+        // Audio plays directly via HTMLAudioElement even if AudioContext fails
       }
     },
     []
   );
 
-  const playNeuralAudioSync = useCallback(
-    (fromStart: boolean) => {
+  const playStaticAudio = useCallback(
+    (options: { fromStart: boolean; isUserGesture: boolean; forceReload?: boolean }) => {
       const audio = audioRef.current;
-      if (!audio || !audioReadyRef.current) return false;
+      if (!audio) return;
+
+      const { fromStart, isUserGesture, forceReload = false } = options;
+      clearLoadTimeout();
+      setErrorMessage(null);
 
       try {
-        if (fromStart && audio.readyState >= 1 && audio.currentTime > 0) {
+        if (forceReload) {
+          audio.src = AUDIO_SRC;
+          audio.load();
+        } else if (fromStart && audio.readyState >= 1 && audio.currentTime > 0) {
           audio.currentTime = 0;
         }
+
+        if (isUserGesture) {
+          updateStatus("loading");
+          loadTimeoutRef.current = window.setTimeout(() => {
+            if (!isMountedRef.current) return;
+            if (statusRef.current === "loading") {
+              updateStatus("error");
+              setErrorMessage(
+                "O áudio demorou mais que o esperado para carregar. Toque em Tentar novamente."
+              );
+              stopVisualizer();
+            }
+          }, PLAYBACK_LOAD_TIMEOUT_MS);
+        } else {
+          updateStatus("loading");
+          loadTimeoutRef.current = window.setTimeout(() => {
+            if (!isMountedRef.current) return;
+            if (statusRef.current === "loading") {
+              updateStatus("autoplay-blocked");
+              stopVisualizer();
+            }
+          }, AUTOPLAY_GUARD_MS);
+        }
+
         const playPromise = audio.play();
         if (playPromise && typeof playPromise.then === "function") {
           playPromise
             .then(() => {
               if (!isMountedRef.current) return;
+              clearLoadTimeout();
               attachDesktopAnalyserIfRunning(audio);
               updateStatus("playing");
               startVisualizer();
             })
-            .catch(() => {
+            .catch((err: unknown) => {
               if (!isMountedRef.current) return;
-              updateStatus("autoplay-blocked");
+              clearLoadTimeout();
+              const isNotAllowed =
+                err instanceof DOMException && err.name === "NotAllowedError";
+              if (isNotAllowed || !isUserGesture) {
+                updateStatus("autoplay-blocked");
+              } else {
+                updateStatus("error");
+                setErrorMessage(
+                  "Não foi possível reproduzir o áudio da assistente no momento. Toque em Tentar novamente."
+                );
+              }
               stopVisualizer();
             });
         } else {
+          clearLoadTimeout();
           attachDesktopAnalyserIfRunning(audio);
           updateStatus("playing");
           startVisualizer();
         }
-        return true;
       } catch {
-        updateStatus("autoplay-blocked");
-        stopVisualizer();
-        return false;
-      }
-    },
-    [attachDesktopAnalyserIfRunning, startVisualizer, stopVisualizer, updateStatus]
-  );
-
-  const initializeAssistantVoice = useCallback(
-    async (playImmediatelyIfAllowed: boolean) => {
-      updateStatus("loading");
-      setErrorMessage(null);
-
-      const controller = new AbortController();
-      const timeoutId = window.setTimeout(
-        () => controller.abort(),
-        FETCH_TIMEOUT_MS
-      );
-
-      try {
-        let url = audioUrlRef.current;
-        if (!url) {
-          const response = await fetch("/api/assistant-voice", {
-            signal: controller.signal,
-            cache: "default",
-          });
-          if (!response.ok) {
-            const errPayload = await response.json().catch(() => null);
-            if (errPayload?.details) {
-              console.error("[assistant-voice]", errPayload.details);
-            }
-            throw new Error(
-              errPayload?.error ||
-                "Não foi possível carregar o áudio oficial da assistente."
-            );
-          }
-          const contentType = response.headers.get("content-type") || "";
-          if (!contentType.includes("audio")) {
-            throw new Error(
-              "O servidor retornou um formato de áudio inesperado."
-            );
-          }
-          const buffer = await response.arrayBuffer();
-          if (buffer.byteLength < 1000) {
-            throw new Error("O arquivo de áudio recebido está incompleto.");
-          }
-          const wavBlob = new Blob([buffer], { type: "audio/wav" });
-          url = URL.createObjectURL(wavBlob);
-          audioUrlRef.current = url;
-        }
-
-        window.clearTimeout(timeoutId);
-        if (!isMountedRef.current) return;
-
-        const audio = audioRef.current;
-        if (!audio) {
-          throw new Error("Elemento de áudio não encontrado.");
-        }
-
-        audio.src = url;
-        audio.load();
-        audioReadyRef.current = true;
-
-        if (playImmediatelyIfAllowed) {
-          playNeuralAudioSync(true);
+        clearLoadTimeout();
+        if (isUserGesture) {
+          updateStatus("error");
+          setErrorMessage(
+            "Não foi possível iniciar o áudio neste dispositivo. Toque em Tentar novamente."
+          );
         } else {
           updateStatus("autoplay-blocked");
         }
-      } catch (err) {
-        window.clearTimeout(timeoutId);
-        if (!isMountedRef.current) return;
-
-        const isAbort = err instanceof DOMException && err.name === "AbortError";
-        updateStatus("error");
-        setErrorMessage(
-          isAbort
-            ? "O áudio da assistente demorou mais que o esperado para carregar. Toque em Tentar novamente."
-            : err instanceof Error
-              ? err.message
-              : "Não foi possível carregar o áudio da assistente no momento."
-        );
         stopVisualizer();
       }
     },
-    [playNeuralAudioSync, stopVisualizer, updateStatus]
+    [
+      attachDesktopAnalyserIfRunning,
+      clearLoadTimeout,
+      startVisualizer,
+      stopVisualizer,
+      updateStatus,
+    ]
   );
 
   useEffect(() => {
     isMountedRef.current = true;
-    void initializeAssistantVoice(true);
+    playStaticAudio({ fromStart: true, isUserGesture: false });
 
     return () => {
       isMountedRef.current = false;
+      clearLoadTimeout();
       stopVisualizer();
       if (audioRef.current) {
         audioRef.current.pause();
-      }
-      if (audioUrlRef.current) {
-        URL.revokeObjectURL(audioUrlRef.current);
-        audioUrlRef.current = null;
       }
       if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
         void audioCtxRef.current.close().catch(() => undefined);
       }
     };
-  }, [initializeAssistantVoice, stopVisualizer]);
+  }, [clearLoadTimeout, playStaticAudio, stopVisualizer]);
 
   const handleActivateAudio = () => {
-    if (audioReadyRef.current) {
-      playNeuralAudioSync(true);
-      return;
-    }
-    void initializeAssistantVoice(true);
+    playStaticAudio({ fromStart: true, isUserGesture: true });
+  };
+
+  const handleRetry = () => {
+    playStaticAudio({
+      fromStart: true,
+      isUserGesture: true,
+      forceReload: true,
+    });
   };
 
   const handleTogglePlayPause = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
     if (status === "error") {
-      void initializeAssistantVoice(true);
+      handleRetry();
       return;
     }
     if (status === "autoplay-blocked") {
       handleActivateAudio();
-      return;
-    }
-
-    const audio = audioRef.current;
-    if (!audio || !audioReadyRef.current) {
-      void initializeAssistantVoice(true);
       return;
     }
 
@@ -344,18 +328,14 @@ export function VirtualAssistant() {
       updateStatus("paused");
       stopVisualizer();
     } else if (status === "paused") {
-      playNeuralAudioSync(false);
+      playStaticAudio({ fromStart: false, isUserGesture: true });
     } else {
-      playNeuralAudioSync(true);
+      playStaticAudio({ fromStart: true, isUserGesture: true });
     }
   };
 
   const handleReplay = () => {
-    if (audioReadyRef.current) {
-      playNeuralAudioSync(true);
-    } else {
-      void initializeAssistantVoice(true);
-    }
+    playStaticAudio({ fromStart: true, isUserGesture: true });
   };
 
   const isSpeaking = status === "playing";
@@ -367,14 +347,22 @@ export function VirtualAssistant() {
       aria-label="Assistente virtual de pagamento"
       className="relative w-full rounded-3xl border border-white/10 bg-[#102B50]/35 backdrop-blur-xl px-5 py-7 sm:px-8 sm:py-8 shadow-[0_24px_64px_-20px_rgba(8,13,24,0.85),0_0_48px_-18px_rgba(22,139,255,0.28)] overflow-hidden"
     >
-      {/* Declarative playsInline audio element for iOS Safari & Chrome reliability */}
+      {/* Static WAV audio element pointing directly to /public/locucao-pix-guilherme-costa.wav */}
       <audio
         ref={audioRef}
+        src={AUDIO_SRC}
         playsInline
         preload="auto"
         className="hidden"
+        onPlaying={() => {
+          if (!isMountedRef.current) return;
+          clearLoadTimeout();
+          updateStatus("playing");
+          startVisualizer();
+        }}
         onEnded={() => {
           if (!isMountedRef.current) return;
+          clearLoadTimeout();
           updateStatus("finished");
           stopVisualizer();
         }}
@@ -385,10 +373,11 @@ export function VirtualAssistant() {
           }
         }}
         onError={() => {
-          if (!isMountedRef.current || !audioReadyRef.current) return;
+          if (!isMountedRef.current) return;
+          clearLoadTimeout();
           updateStatus("error");
           setErrorMessage(
-            "Não foi possível reproduzir o áudio oficial neste dispositivo. Toque em Tentar novamente."
+            "Não foi possível carregar o áudio da assistente no momento. Toque em Tentar novamente."
           );
           stopVisualizer();
         }}
@@ -542,7 +531,7 @@ export function VirtualAssistant() {
               </span>
               <button
                 type="button"
-                onClick={() => void initializeAssistantVoice(true)}
+                onClick={handleRetry}
                 className="inline-flex items-center justify-center gap-2 min-h-[44px] px-4 py-2 rounded-xl border border-white/15 bg-white/10 hover:bg-white/15 text-white font-medium text-sm transition-all cursor-pointer whitespace-nowrap shrink-0"
               >
                 <RotateCcw className="w-4 h-4 text-[#19DDB5]" />
