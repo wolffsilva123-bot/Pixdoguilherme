@@ -10,10 +10,12 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { PixLogo } from "./PixLogo";
+import { MercadoPagoLogo } from "./MercadoPagoLogo";
 
 const RAW_PIX_KEY = "24992687918";
 const FORMATTED_PIX_KEY = "(24) 99268-7918";
 const RECIPIENT_NAME = "Guilherme Pereira Costa";
+const RECIPIENT_BANK = "MERCADO PAGO";
 
 export function PixPaymentCard() {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
@@ -135,14 +137,14 @@ export function PixPaymentCard() {
         </p>
       </div>
 
-      {/* Recipient & Pix Key Details */}
+      {/* Recipient, Bank & Pix Key Details */}
       <div className="mt-6 space-y-5">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 pt-2">
           <div>
             <span className="block text-xs font-medium text-white/60">
-              Recebedor
+              Nome do recebedor
             </span>
-            <p className="mt-1 font-display text-lg font-semibold text-white">
+            <p className="mt-1.5 font-display text-lg sm:text-xl font-semibold text-white">
               {RECIPIENT_NAME}
             </p>
           </div>
@@ -151,19 +153,34 @@ export function PixPaymentCard() {
             <span className="block text-xs font-medium text-white/60">
               Tipo de chave
             </span>
-            <div className="mt-1 flex items-center gap-2 text-base font-medium text-white">
+            <div className="mt-1.5 flex items-center gap-2 text-base font-medium text-white">
               <Smartphone className="w-4 h-4 text-[#168BFF] shrink-0" />
-              <span>Número de celular</span>
+              <span>Celular</span>
+            </div>
+          </div>
+
+          {/* Banco recebedor: MERCADO PAGO */}
+          <div className="sm:col-span-2 rounded-2xl border border-[#009EE3]/35 bg-[#009EE3]/10 px-4 py-3.5 flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <span className="block text-xs font-medium text-white/65">
+                Banco recebedor
+              </span>
+              <p className="mt-1 font-display text-base sm:text-lg font-extrabold tracking-wide text-white">
+                {RECIPIENT_BANK}
+              </p>
+            </div>
+            <div className="flex items-center justify-center rounded-xl bg-white/10 border border-white/15 px-2.5 py-1.5 shrink-0">
+              <MercadoPagoLogo className="w-10 h-7" />
             </div>
           </div>
         </div>
 
         {/* Highlighted Pix Key */}
         <div className="rounded-2xl border border-[#168BFF]/35 bg-[#080D18]/75 px-5 py-5 shadow-inner">
-          <div className="flex items-center justify-between gap-2 text-xs text-white/65">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-white/65">
             <span className="inline-flex items-center gap-1.5 font-medium">
               <PixLogo className="w-3.5 h-3.5 text-[#19DDB5]" />
-              Chave Pix identificada
+              Chave Pix
             </span>
             <span className="font-mono text-[11px] text-[#19DDB5]/90 tabular-nums">
               Cópia numérica: {RAW_PIX_KEY}
@@ -238,7 +255,7 @@ export function PixPaymentCard() {
                     <strong className="text-white font-semibold">
                       {RECIPIENT_NAME}
                     </strong>{" "}
-                    e conclua seu pagamento por lá.
+                    ({RECIPIENT_BANK}) e conclua seu pagamento por lá.
                   </p>
                   <p className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[#A8F5E5] pt-0.5">
                     <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />

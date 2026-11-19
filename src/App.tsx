@@ -22,7 +22,7 @@ const PAYMENT_STEPS = [
     number: "03",
     title: "Confira e finalize",
     description:
-      "Confirme que o recebedor é Guilherme Pereira Costa e conclua o pagamento com segurança.",
+      "Confirme que o recebedor é Guilherme Pereira Costa (banco Mercado Pago) e conclua o pagamento com segurança.",
     icon: CheckCircle2,
   },
 ];

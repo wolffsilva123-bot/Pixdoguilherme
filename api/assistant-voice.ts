@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "http";
 import { GoogleGenAI } from "@google/genai";
 
 const ASSISTANT_TEXT =
-  "Olá! Seja bem-vindo. Para realizar seu pagamento via Pix, basta clicar no botão Copiar Chave Pix e depois acessar o aplicativo do seu banco para concluir o pagamento. O recebedor é Guilherme Pereira Costa. É simples, rápido e seguro. Obrigado!";
+  "Olá! Seja bem-vindo. Para realizar seu pagamento via Pix, basta clicar no botão Copiar Chave Pix e depois acessar o aplicativo do seu banco para concluir o pagamento. O recebedor é Guilherme Pereira Costa e o banco é Mercado Pago. É simples, rápido e seguro. Obrigado!";
 
 const VOICE_STYLE =
   "Adult Brazilian woman speaking Brazilian Portuguese (pt-BR) with a soft, calm, warm, welcoming, delicate and pleasant voice. Moderate pace, clear pronunciation, natural conversational intonation, gentle reassurance, completely human and never robotic, never like GPS navigation or automated IVR.";
