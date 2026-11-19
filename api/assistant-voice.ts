@@ -20,7 +20,8 @@ async function generateAssistantAudio(): Promise<Buffer> {
   }
 
   inFlightGeneration = (async () => {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey =
+      process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
     if (!apiKey) {
       throw new Error("GEMINI_API_KEY não configurada no ambiente do servidor.");
     }
@@ -89,6 +90,7 @@ export default async function handler(
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
     res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
     res.end(JSON.stringify({ error: "Method not allowed" }));
     return;
   }
@@ -112,6 +114,7 @@ export default async function handler(
     console.error("[vercel assistant-voice] Erro ao gerar áudio:", error);
     res.statusCode = 503;
     res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
     res.end(
       JSON.stringify({
         error: "Não foi possível reproduzir o áudio da assistente no momento.",

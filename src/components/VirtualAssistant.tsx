@@ -13,15 +13,13 @@ type AssistantState =
   | "finished"
   | "error";
 
-type AudioEngine = "neural-audio" | "speech-synthesis";
-
 const BAR_COUNT = 24;
 const IDLE_BARS = Array.from({ length: BAR_COUNT }, (_, idx) => {
   const distanceFromCenter = Math.abs(idx - (BAR_COUNT - 1) / 2);
   return Math.max(0.18, 0.45 - distanceFromCenter * 0.025);
 });
 
-const FETCH_TIMEOUT_MS = 10000;
+const FETCH_TIMEOUT_MS = 25000;
 
 function isAppleMobileOrSafari(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -31,98 +29,6 @@ function isAppleMobileOrSafari(): boolean {
     navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
   const isSafari = /^((?!chrome|android).)*safari/i.test(ua);
   return isIOS || isTouchMac || isSafari;
-}
-
-function pickBrazilianFemaleVoice(
-  voices: SpeechSynthesisVoice[]
-): SpeechSynthesisVoice | null {
-  if (!voices.length) return null;
-
-  const ptBrVoices = voices.filter((v) =>
-    v.lang.toLowerCase().replace("_", "-").startsWith("pt-br")
-  );
-  const ptVoices =
-    ptBrVoices.length > 0
-      ? ptBrVoices
-      : voices.filter((v) => v.lang.toLowerCase().startsWith("pt"));
-
-  if (!ptVoices.length) return null;
-
-  const femalePreferredNames = [
-    "francisca",
-    "thalita",
-    "luciana",
-    "maria",
-    "vitoria",
-    "vitória",
-    "camila",
-    "fernanda",
-    "raquel",
-    "leticia",
-    "letícia",
-    "google português do brasil",
-    "female",
-    "mulher",
-    "natural",
-  ];
-  const maleOrRoboticNames = [
-    "daniel",
-    "felipe",
-    "ricardo",
-    "antonio",
-    "antônio",
-    "thiago",
-    "espeak",
-    "male",
-  ];
-
-  const scored = ptVoices.map((voice) => {
-    const name = voice.name.toLowerCase();
-    let score = 0;
-    if (voice.lang.toLowerCase().replace("_", "-") === "pt-br") score += 20;
-    if (!voice.localService) score += 8;
-    for (let i = 0; i < femalePreferredNames.length; i++) {
-      if (name.includes(femalePreferredNames[i])) {
-        score += 35 - i;
-      }
-    }
-    for (const bad of maleOrRoboticNames) {
-      if (name.includes(bad)) {
-        score -= 50;
-      }
-    }
-    return { voice, score };
-  });
-
-  scored.sort((a, b) => b.score - a.score);
-  return scored[0]?.voice ?? ptVoices[0];
-}
-
-function loadSpeechVoices(): Promise<SpeechSynthesisVoice[]> {
-  return new Promise((resolve) => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      resolve([]);
-      return;
-    }
-
-    const existing = window.speechSynthesis.getVoices();
-    if (existing.length > 0) {
-      resolve(existing);
-      return;
-    }
-
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      window.speechSynthesis.removeEventListener?.("voiceschanged", onChanged);
-      resolve(window.speechSynthesis.getVoices());
-    };
-
-    const onChanged = () => finish();
-    window.speechSynthesis.addEventListener?.("voiceschanged", onChanged);
-    window.setTimeout(finish, 600);
-  });
 }
 
 export function VirtualAssistant() {
@@ -137,15 +43,10 @@ export function VirtualAssistant() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceConnectedRef = useRef<boolean>(false);
-  const engineRef = useRef<AudioEngine>("neural-audio");
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const speechVoicesRef = useRef<SpeechSynthesisVoice[]>([]);
   const rafRef = useRef<number | null>(null);
-  const statusRef = useRef<AssistantState>("loading");
   const isMountedRef = useRef<boolean>(true);
 
   const updateStatus = useCallback((next: AssistantState) => {
-    statusRef.current = next;
     setStatus(next);
   }, []);
 
@@ -169,19 +70,14 @@ export function VirtualAssistant() {
     const tick = (now: number) => {
       if (!isMountedRef.current) return;
 
-      if (engineRef.current === "neural-audio") {
-        const audio = audioRef.current;
-        if (!audio || audio.paused || audio.ended) {
-          stopVisualizer();
-          return;
-        }
-      } else if (statusRef.current !== "playing") {
+      const audio = audioRef.current;
+      if (!audio || audio.paused || audio.ended) {
         stopVisualizer();
         return;
       }
 
       let usedAnalyser = false;
-      if (engineRef.current === "neural-audio" && analyser && freqData) {
+      if (analyser && freqData) {
         analyser.getByteFrequencyData(freqData);
         let energySum = 0;
         const usableBins = Math.min(freqData.length, 48);
@@ -207,12 +103,12 @@ export function VirtualAssistant() {
       }
 
       if (!usedAnalyser) {
-        // Organic speech-synchronized animation (used on iOS Safari & SpeechSynthesis)
         const nextBars = Array.from({ length: BAR_COUNT }, (_, i) => {
           const centerFactor =
             1 - Math.abs(i - (BAR_COUNT - 1) / 2) / (BAR_COUNT / 1.4);
           const wave =
-            (0.32 + 0.45 * centerFactor) +
+            0.32 +
+            0.45 * centerFactor +
             0.28 *
               Math.sin(now * 0.009 + i * 0.52) *
               Math.cos(now * 0.0045 - i * 0.28);
@@ -228,116 +124,58 @@ export function VirtualAssistant() {
     rafRef.current = requestAnimationFrame(tick);
   }, [stopVisualizer]);
 
-  const attachDesktopAnalyser = useCallback((audio: HTMLAudioElement) => {
-    // Never attach createMediaElementSource on Apple/Safari: it mutes blob audio on iOS.
-    if (isAppleMobileOrSafari() || sourceConnectedRef.current) return;
-    try {
-      const AudioContextClass =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext?: typeof AudioContext })
-          .webkitAudioContext;
-      if (!AudioContextClass) return;
-
-      if (!audioCtxRef.current) {
-        audioCtxRef.current = new AudioContextClass();
-      }
-      if (audioCtxRef.current.state === "suspended") {
-        void audioCtxRef.current.resume().catch(() => undefined);
-      }
-      const analyser = audioCtxRef.current.createAnalyser();
-      analyser.fftSize = 128;
-      analyser.smoothingTimeConstant = 0.78;
-      const source = audioCtxRef.current.createMediaElementSource(audio);
-      source.connect(analyser);
-      analyser.connect(audioCtxRef.current.destination);
-      analyserRef.current = analyser;
-      sourceConnectedRef.current = true;
-    } catch {
-      // Safe fallback: audio plays natively without WebAudio analyser
-    }
-  }, []);
-
-  const playSpeechSynthesis = useCallback(
-    (isUserGesture: boolean) => {
-      if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-        updateStatus("error");
-        setErrorMessage(
-          "Seu navegador não suporta reprodução de áudio da assistente."
-        );
-        stopVisualizer();
-        return;
-      }
-
+  const attachDesktopAnalyserIfRunning = useCallback(
+    (audio: HTMLAudioElement) => {
+      // Never attach createMediaElementSource on Apple/Safari or while AudioContext is suspended
+      if (isAppleMobileOrSafari() || sourceConnectedRef.current) return;
       try {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(ASSISTANT_MESSAGE);
-        utterance.lang = "pt-BR";
-        utterance.rate = 0.96;
-        utterance.pitch = 1.03;
-        utterance.volume = 1;
+        const AudioContextClass =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext })
+            .webkitAudioContext;
+        if (!AudioContextClass) return;
 
-        const chosenVoice = pickBrazilianFemaleVoice(
-          speechVoicesRef.current.length > 0
-            ? speechVoicesRef.current
-            : window.speechSynthesis.getVoices()
-        );
-        if (chosenVoice) {
-          utterance.voice = chosenVoice;
+        if (!audioCtxRef.current) {
+          audioCtxRef.current = new AudioContextClass();
         }
-
-        let started = false;
-        const startGuardTimer = window.setTimeout(() => {
-          if (!isMountedRef.current || started) return;
-          if (!isUserGesture) {
-            window.speechSynthesis.cancel();
-            updateStatus("autoplay-blocked");
-            stopVisualizer();
-          }
-        }, 1200);
-
-        utterance.onstart = () => {
-          started = true;
-          window.clearTimeout(startGuardTimer);
-          if (!isMountedRef.current) return;
-          updateStatus("playing");
-          startVisualizer();
-        };
-
-        utterance.onend = () => {
-          window.clearTimeout(startGuardTimer);
-          if (!isMountedRef.current) return;
-          updateStatus("finished");
-          stopVisualizer();
-        };
-
-        utterance.onerror = (event) => {
-          window.clearTimeout(startGuardTimer);
-          if (!isMountedRef.current) return;
-          if (event.error === "not-allowed" || !isUserGesture) {
-            updateStatus("autoplay-blocked");
-          } else if (event.error !== "interrupted" && event.error !== "canceled") {
-            updateStatus("error");
-            setErrorMessage("Não foi possível reproduzir a voz da assistente.");
-          }
-          stopVisualizer();
-        };
-
-        utteranceRef.current = utterance;
-        window.speechSynthesis.speak(utterance);
-
-        if (isUserGesture) {
-          updateStatus("playing");
-          startVisualizer();
+        const ctx = audioCtxRef.current;
+        if (ctx.state === "suspended") {
+          void ctx
+            .resume()
+            .then(() => {
+              if (
+                ctx.state === "running" &&
+                !sourceConnectedRef.current &&
+                audioRef.current === audio
+              ) {
+                const analyser = ctx.createAnalyser();
+                analyser.fftSize = 128;
+                analyser.smoothingTimeConstant = 0.78;
+                const source = ctx.createMediaElementSource(audio);
+                source.connect(analyser);
+                analyser.connect(ctx.destination);
+                analyserRef.current = analyser;
+                sourceConnectedRef.current = true;
+              }
+            })
+            .catch(() => undefined);
+          return;
+        }
+        if (ctx.state === "running") {
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 128;
+          analyser.smoothingTimeConstant = 0.78;
+          const source = ctx.createMediaElementSource(audio);
+          source.connect(analyser);
+          analyser.connect(ctx.destination);
+          analyserRef.current = analyser;
+          sourceConnectedRef.current = true;
         }
       } catch {
-        updateStatus(isUserGesture ? "error" : "autoplay-blocked");
-        if (isUserGesture) {
-          setErrorMessage("Não foi possível iniciar a reprodução de voz.");
-        }
-        stopVisualizer();
+        // Audio still plays natively without WebAudio analyser
       }
     },
-    [startVisualizer, stopVisualizer, updateStatus]
+    []
   );
 
   const playNeuralAudioSync = useCallback(
@@ -349,12 +187,12 @@ export function VirtualAssistant() {
         if (fromStart && audio.readyState >= 1 && audio.currentTime > 0) {
           audio.currentTime = 0;
         }
-        attachDesktopAnalyser(audio);
         const playPromise = audio.play();
         if (playPromise && typeof playPromise.then === "function") {
           playPromise
             .then(() => {
               if (!isMountedRef.current) return;
+              attachDesktopAnalyserIfRunning(audio);
               updateStatus("playing");
               startVisualizer();
             })
@@ -364,6 +202,7 @@ export function VirtualAssistant() {
               stopVisualizer();
             });
         } else {
+          attachDesktopAnalyserIfRunning(audio);
           updateStatus("playing");
           startVisualizer();
         }
@@ -374,18 +213,13 @@ export function VirtualAssistant() {
         return false;
       }
     },
-    [attachDesktopAnalyser, startVisualizer, stopVisualizer, updateStatus]
+    [attachDesktopAnalyserIfRunning, startVisualizer, stopVisualizer, updateStatus]
   );
 
   const initializeAssistantVoice = useCallback(
     async (playImmediatelyIfAllowed: boolean) => {
       updateStatus("loading");
       setErrorMessage(null);
-
-      // Preload browser voices in parallel for instant fallback if needed
-      void loadSpeechVoices().then((voices) => {
-        speechVoicesRef.current = voices;
-      });
 
       const controller = new AbortController();
       const timeoutId = window.setTimeout(
@@ -398,18 +232,27 @@ export function VirtualAssistant() {
         if (!url) {
           const response = await fetch("/api/assistant-voice", {
             signal: controller.signal,
-            cache: "force-cache",
+            cache: "default",
           });
           if (!response.ok) {
-            throw new Error("Serviço de voz neural indisponível.");
+            const errPayload = await response.json().catch(() => null);
+            if (errPayload?.details) {
+              console.error("[assistant-voice]", errPayload.details);
+            }
+            throw new Error(
+              errPayload?.error ||
+                "Não foi possível carregar o áudio oficial da assistente."
+            );
           }
           const contentType = response.headers.get("content-type") || "";
           if (!contentType.includes("audio")) {
-            throw new Error("Formato de áudio inválido recebido do servidor.");
+            throw new Error(
+              "O servidor retornou um formato de áudio inesperado."
+            );
           }
           const buffer = await response.arrayBuffer();
           if (buffer.byteLength < 1000) {
-            throw new Error("Áudio recebido incompleto.");
+            throw new Error("O arquivo de áudio recebido está incompleto.");
           }
           const wavBlob = new Blob([buffer], { type: "audio/wav" });
           url = URL.createObjectURL(wavBlob);
@@ -424,7 +267,6 @@ export function VirtualAssistant() {
           throw new Error("Elemento de áudio não encontrado.");
         }
 
-        engineRef.current = "neural-audio";
         audio.src = url;
         audio.load();
         audioReadyRef.current = true;
@@ -434,32 +276,23 @@ export function VirtualAssistant() {
         } else {
           updateStatus("autoplay-blocked");
         }
-      } catch {
+      } catch (err) {
         window.clearTimeout(timeoutId);
         if (!isMountedRef.current) return;
 
-        // Graceful fallback to Brazilian Portuguese female SpeechSynthesis
-        const voices = await loadSpeechVoices();
-        speechVoicesRef.current = voices;
-
-        if (typeof window !== "undefined" && "speechSynthesis" in window) {
-          engineRef.current = "speech-synthesis";
-          if (playImmediatelyIfAllowed && !isAppleMobileOrSafari()) {
-            playSpeechSynthesis(false);
-          } else {
-            updateStatus("autoplay-blocked");
-            stopVisualizer();
-          }
-        } else {
-          updateStatus("error");
-          setErrorMessage(
-            "Não foi possível carregar o áudio da assistente no momento."
-          );
-          stopVisualizer();
-        }
+        const isAbort = err instanceof DOMException && err.name === "AbortError";
+        updateStatus("error");
+        setErrorMessage(
+          isAbort
+            ? "O áudio da assistente demorou mais que o esperado para carregar. Toque em Tentar novamente."
+            : err instanceof Error
+              ? err.message
+              : "Não foi possível carregar o áudio da assistente no momento."
+        );
+        stopVisualizer();
       }
     },
-    [playNeuralAudioSync, playSpeechSynthesis, stopVisualizer, updateStatus]
+    [playNeuralAudioSync, stopVisualizer, updateStatus]
   );
 
   useEffect(() => {
@@ -472,9 +305,6 @@ export function VirtualAssistant() {
       if (audioRef.current) {
         audioRef.current.pause();
       }
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-      }
       if (audioUrlRef.current) {
         URL.revokeObjectURL(audioUrlRef.current);
         audioUrlRef.current = null;
@@ -486,12 +316,8 @@ export function VirtualAssistant() {
   }, [initializeAssistantVoice, stopVisualizer]);
 
   const handleActivateAudio = () => {
-    if (engineRef.current === "neural-audio" && audioReadyRef.current) {
+    if (audioReadyRef.current) {
       playNeuralAudioSync(true);
-      return;
-    }
-    if (engineRef.current === "speech-synthesis") {
-      playSpeechSynthesis(true);
       return;
     }
     void initializeAssistantVoice(true);
@@ -504,17 +330,6 @@ export function VirtualAssistant() {
     }
     if (status === "autoplay-blocked") {
       handleActivateAudio();
-      return;
-    }
-
-    if (engineRef.current === "speech-synthesis") {
-      if (status === "playing") {
-        window.speechSynthesis.cancel();
-        updateStatus("paused");
-        stopVisualizer();
-      } else {
-        playSpeechSynthesis(true);
-      }
       return;
     }
 
@@ -536,10 +351,6 @@ export function VirtualAssistant() {
   };
 
   const handleReplay = () => {
-    if (engineRef.current === "speech-synthesis") {
-      playSpeechSynthesis(true);
-      return;
-    }
     if (audioReadyRef.current) {
       playNeuralAudioSync(true);
     } else {
@@ -556,7 +367,7 @@ export function VirtualAssistant() {
       aria-label="Assistente virtual de pagamento"
       className="relative w-full rounded-3xl border border-white/10 bg-[#102B50]/35 backdrop-blur-xl px-5 py-7 sm:px-8 sm:py-8 shadow-[0_24px_64px_-20px_rgba(8,13,24,0.85),0_0_48px_-18px_rgba(22,139,255,0.28)] overflow-hidden"
     >
-      {/* Declarative playsInline audio element for iOS Safari reliability */}
+      {/* Declarative playsInline audio element for iOS Safari & Chrome reliability */}
       <audio
         ref={audioRef}
         playsInline
@@ -575,17 +386,11 @@ export function VirtualAssistant() {
         }}
         onError={() => {
           if (!isMountedRef.current || !audioReadyRef.current) return;
-          // If WAV playback fails on device, transparently fall back to PT-BR SpeechSynthesis
-          if (typeof window !== "undefined" && "speechSynthesis" in window) {
-            engineRef.current = "speech-synthesis";
-            audioReadyRef.current = false;
-            updateStatus("autoplay-blocked");
-            stopVisualizer();
-          } else {
-            updateStatus("error");
-            setErrorMessage("Não foi possível reproduzir o áudio neste dispositivo.");
-            stopVisualizer();
-          }
+          updateStatus("error");
+          setErrorMessage(
+            "Não foi possível reproduzir o áudio oficial neste dispositivo. Toque em Tentar novamente."
+          );
+          stopVisualizer();
         }}
       />
 
@@ -732,7 +537,8 @@ export function VirtualAssistant() {
             <div className="flex flex-col sm:flex-row items-center gap-3">
               <span className="inline-flex items-center gap-2 text-xs sm:text-sm text-amber-200/90">
                 <AlertCircle className="w-4 h-4 shrink-0 text-amber-300" />
-                {errorMessage || "Áudio indisponível no momento."}
+                {errorMessage ||
+                  "Não foi possível carregar o áudio da assistente no momento."}
               </span>
               <button
                 type="button"

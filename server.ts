@@ -19,7 +19,8 @@ let cachedAudioWav: Buffer | null = null;
 let inFlightGeneration: Promise<Buffer> | null = null;
 
 function createGeminiClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey =
+    process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY não configurada no ambiente do servidor.");
   }
@@ -113,6 +114,7 @@ async function startServer() {
           ? error.message
           : "Não foi possível carregar a voz da assistente.";
       console.error("[assistant-voice] Erro ao gerar áudio:", error);
+      res.setHeader("Cache-Control", "no-store");
       res.status(503).json({
         error: "Não foi possível reproduzir o áudio da assistente no momento.",
         details: message,
